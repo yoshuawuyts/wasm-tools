@@ -155,7 +155,7 @@ impl Producers {
     /// Merge into an existing wasm module. Rewrites the module with this producers section
     /// merged into its existing one, or adds this producers section if none is present.
     pub fn add_to_wasm(&self, input: &[u8]) -> Result<Vec<u8>> {
-        rewrite_wasm(&None, self, None, input)
+        rewrite_wasm(&None, self, &None, &None, &None, input)
     }
 
     fn display(&self, f: &mut fmt::Formatter, indent: usize) -> fmt::Result {
@@ -217,9 +217,20 @@ pub struct AddMetadata {
     #[cfg_attr(feature="clap", clap(long, value_parser = parse_key_value, value_name="NAME=VERSION"))]
     pub sdk: Vec<(String, String)>,
 
-    /// Add an registry metadata to the registry-metadata section
-    #[cfg_attr(feature="clap", clap(long, value_parser = parse_registry_metadata_value, value_name="PATH"))]
-    pub registry_metadata: Option<RegistryMetadata>,
+    /// Contact details of the people or organization responsible for the
+    /// component, encoded as a free-form string
+    #[cfg_attr(feature = "clap", clap(long))]
+    pub authors: Option<String>,
+
+    /// Component description as a string.
+    #[cfg_attr(feature = "clap", clap(long))]
+    pub description: Option<String>,
+
+    /// SPDX License Expression
+    /// <https://spdx.github.io/spdx-spec/v2.3/SPDX-license-expressions/>
+    /// SPDX License List: <https://spdx.org/licenses/>
+    #[cfg_attr(feature = "clap", clap(long))]
+    pub license: Option<spdx::Expression>,
 }
 
 #[cfg(feature = "clap")]
@@ -229,33 +240,27 @@ fn parse_key_value(s: &str) -> Result<(String, String)> {
         .ok_or_else(|| anyhow::anyhow!("expected KEY=VALUE"))
 }
 
-#[cfg(feature = "clap")]
-fn parse_registry_metadata_value(s: &str) -> Result<RegistryMetadata> {
-    let contents = std::fs::read(s)?;
-
-    let registry_metadata = RegistryMetadata::from_bytes(&contents, 0)?;
-
-    Ok(registry_metadata)
-}
-
 impl AddMetadata {
     /// Process a WebAssembly binary. Supports both core WebAssembly modules, and WebAssembly
     /// components. The module and component will have, at very least, an empty name and producers
     /// section created.
     pub fn to_wasm(&self, input: &[u8]) -> Result<Vec<u8>> {
-        rewrite_wasm(
-            &self.name,
-            &Producers::from_meta(self),
-            self.registry_metadata.as_ref(),
-            input,
-        )
+        let name = &self.name;
+        let producers = &Producers::from_meta(self);
+        let authors = &self.authors;
+        let description = &self.description;
+        let license = &self.license;
+
+        rewrite_wasm(name, producers, authors, description, license, input)
     }
 }
 
 fn rewrite_wasm(
     add_name: &Option<String>,
     add_producers: &Producers,
-    add_registry_metadata: Option<&RegistryMetadata>,
+    add_authors: &Option<String>,
+    add_description: &Option<String>,
+    add_license: &Option<spdx::Expression>,
     input: &[u8],
 ) -> Result<Vec<u8>> {
     let mut producers_found = false;
@@ -322,20 +327,6 @@ fn rewrite_wasm(
                         names.section()?.as_custom().append_to(&mut output);
                         continue;
                     }
-                    KnownCustom::Unknown if c.name() == "registry-metadata" => {
-                        // Pass section through if a new registry metadata isn't provided, otherwise ignore and overwrite with new
-                        if add_registry_metadata.is_none() {
-                            let registry: RegistryMetadata =
-                                RegistryMetadata::from_bytes(&c.data(), 0)?;
-
-                            let registry_metadata = wasm_encoder::CustomSection {
-                                name: Cow::Borrowed("registry-metadata"),
-                                data: Cow::Owned(serde_json::to_vec(&registry)?),
-                            };
-                            registry_metadata.append_to(&mut output);
-                            continue;
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -364,13 +355,6 @@ fn rewrite_wasm(
         producers.merge(add_producers);
         // Encode into output:
         producers.section().append_to(&mut output);
-    }
-    if add_registry_metadata.is_some() {
-        let registry_metadata = wasm_encoder::CustomSection {
-            name: Cow::Borrowed("registry-metadata"),
-            data: Cow::Owned(serde_json::to_vec(&add_registry_metadata)?),
-        };
-        registry_metadata.append_to(&mut output);
     }
     Ok(output)
 }
@@ -782,256 +766,6 @@ fn indirect_name_map(
         out.append(m.index, &name_map(&m.names)?);
     }
     Ok(out)
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
-pub struct RegistryMetadata {
-    /// List of authors who has created this package.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    authors: Option<Vec<String>>,
-
-    /// Package description in markdown format.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-
-    /// SPDX License Expression
-    /// <https://spdx.github.io/spdx-spec/v2.3/SPDX-license-expressions/>
-    /// SPDX License List: <https://spdx.org/licenses/>
-    #[serde(skip_serializing_if = "Option::is_none")]
-    license: Option<String>,
-
-    /// A list of custom licenses that should be referenced to from the license expression.
-    /// <https://spdx.github.io/spdx-spec/v2.3/other-licensing-information-detected/>
-    #[serde(skip_serializing_if = "Option::is_none")]
-    custom_licenses: Option<Vec<CustomLicense>>,
-
-    /// A list of links that can contain predefined link types or custom links for use with tooling or registries.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    links: Option<Vec<Link>>,
-
-    /// A list of categories that a package should be listed under when uploaded to a registry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    categories: Option<Vec<String>>,
-}
-
-const LICENSE_REF: &str = "LicenseRef-";
-
-impl RegistryMetadata {
-    /// Merge into an existing wasm module. Rewrites the module with this registry-metadata section
-    /// overwriting its existing one, or adds this registry-metadata section if none is present.
-    pub fn add_to_wasm(&self, input: &[u8]) -> Result<Vec<u8>> {
-        rewrite_wasm(&None, &Producers::empty(), Some(&self), input)
-    }
-
-    pub fn from_wasm(bytes: &[u8]) -> Result<Option<Self>> {
-        let mut depth = 0;
-        for payload in Parser::new(0).parse_all(bytes) {
-            let payload = payload?;
-            use wasmparser::Payload::*;
-            match payload {
-                ModuleSection { .. } | ComponentSection { .. } => depth += 1,
-                End { .. } => depth -= 1,
-                CustomSection(c) if c.name() == "registry-metadata" && depth == 0 => {
-                    let registry = RegistryMetadata::from_bytes(&c.data(), 0)?;
-                    return Ok(Some(registry));
-                }
-                _ => {}
-            }
-        }
-        Ok(None)
-    }
-
-    /// Gets the registry-matadata from a slice of bytes
-    pub fn from_bytes(bytes: &[u8], offset: usize) -> Result<Self> {
-        let registry: RegistryMetadata = serde_json::from_slice(&bytes[offset..])?;
-        return Ok(registry);
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        fn validate_expression(expression: &str) -> Result<Vec<String>> {
-            let expression = Expression::parse(expression)?;
-
-            let mut licenses = Vec::new();
-
-            for license in expression.iter() {
-                match license {
-                    spdx::expression::ExprNode::Op(_) => continue,
-                    spdx::expression::ExprNode::Req(req) => {
-                        if let spdx::LicenseItem::Spdx { .. } = req.req.license {
-                            // Continue if it's a license that exists on the Spdx license list
-                            continue;
-                        }
-
-                        let license_id = req.req.to_string();
-
-                        // Strip "LicenseRef-", convert to lowercase and then append
-                        if let Some(id) = license_id.strip_prefix(LICENSE_REF) {
-                            licenses.push(id.to_lowercase());
-                        }
-                    }
-                }
-            }
-
-            Ok(licenses)
-        }
-
-        match (&self.license, &self.custom_licenses) {
-            (None, Some(custom_licenses)) => {
-                let ids = custom_licenses
-                    .iter()
-                    .map(|license| license.id.clone())
-                    .collect::<Vec<String>>()
-                    .join(", ");
-
-                return Err(anyhow::anyhow!(
-                    "{ids} are defined but nevered referenced in license expression"
-                ));
-            }
-            (Some(license), Some(custom_licenses)) => {
-                let licenses = validate_expression(license.as_str())?;
-
-                if !licenses.is_empty() {
-                    for license in &licenses {
-                        let mut match_found = false;
-                        for custom_license in custom_licenses {
-                            // Ignore license id casing
-                            if custom_license.id.to_lowercase() == *license {
-                                match_found = true;
-                            }
-                        }
-
-                        if !match_found {
-                            return Err(anyhow::anyhow!(
-                                "No matching reference for license '{license}' was defined"
-                            ));
-                        }
-                    }
-                }
-            }
-            (Some(license), None) => {
-                let licenses = validate_expression(license.as_str())?;
-
-                if !licenses.is_empty() {
-                    return Err(anyhow::anyhow!(
-                        "Reference to custom license exists but no custom license was given"
-                    ));
-                }
-            }
-            (None, None) => {}
-        }
-
-        Ok(())
-    }
-
-    /// Get authors
-    pub fn get_authors(&self) -> Option<&Vec<String>> {
-        self.authors.as_ref()
-    }
-
-    /// Set authors
-    pub fn set_authors(&mut self, authors: Option<Vec<String>>) {
-        self.authors = authors;
-    }
-
-    /// Get description
-    pub fn get_description(&self) -> Option<&String> {
-        self.description.as_ref()
-    }
-
-    /// Set description
-    pub fn set_description(&mut self, description: Option<String>) {
-        self.description = description;
-    }
-
-    /// Get license
-    pub fn get_license(&self) -> Option<&String> {
-        self.license.as_ref()
-    }
-
-    /// Set license
-    pub fn set_license(&mut self, license: Option<String>) {
-        self.license = license;
-    }
-
-    /// Get custom_licenses
-    pub fn get_custom_licenses(&self) -> Option<&Vec<CustomLicense>> {
-        self.custom_licenses.as_ref()
-    }
-
-    /// Set custom_licenses
-    pub fn set_custom_licenses(&mut self, custom_licenses: Option<Vec<CustomLicense>>) {
-        self.custom_licenses = custom_licenses;
-    }
-
-    /// Get links
-    pub fn get_links(&self) -> Option<&Vec<Link>> {
-        self.links.as_ref()
-    }
-
-    /// Set links
-    pub fn set_links(&mut self, links: Option<Vec<Link>>) {
-        self.links = links;
-    }
-
-    /// Get categories
-    pub fn get_categories(&self) -> Option<&Vec<String>> {
-        self.categories.as_ref()
-    }
-
-    /// Set categories
-    pub fn set_categories(&mut self, categories: Option<Vec<String>>) {
-        self.categories = categories;
-    }
-
-    fn display(&self, f: &mut fmt::Formatter, indent: usize) -> fmt::Result {
-        let spaces = std::iter::repeat(" ").take(indent).collect::<String>();
-
-        if let Some(authors) = &self.authors {
-            writeln!(f, "{spaces}authors:")?;
-            for author in authors {
-                writeln!(f, "{spaces}    {author}")?;
-            }
-        }
-
-        if let Some(license) = &self.license {
-            writeln!(f, "{spaces}license:")?;
-            writeln!(f, "{spaces}    {license}")?;
-        }
-
-        if let Some(links) = &self.links {
-            writeln!(f, "{spaces}links:")?;
-            for link in links {
-                writeln!(f, "{spaces}    {link}")?;
-            }
-        }
-
-        if let Some(categories) = &self.categories {
-            writeln!(f, "{spaces}categories:")?;
-            for category in categories {
-                writeln!(f, "{spaces}    {category}")?;
-            }
-        }
-
-        if let Some(description) = &self.description {
-            writeln!(f, "{spaces}description:")?;
-            writeln!(f, "{spaces}    {description}")?;
-        }
-
-        if let Some(custom_licenses) = &self.custom_licenses {
-            writeln!(f, "{spaces}custom_licenses:")?;
-            for license in custom_licenses {
-                license.display(f, indent + 4)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl Display for RegistryMetadata {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.display(f, 0)
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]

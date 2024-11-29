@@ -360,11 +360,11 @@ impl Display for CustomLicense {
 mod test {
     use super::*;
     use crate::Metadata;
-    use wasm_encoder::Module;
+    use wasm_encoder::Component;
 
     #[test]
     fn overwrite_registry_metadata() {
-        let module = Module::new().finish();
+        let module = Component::new().finish();
         let registry_metadata = RegistryMetadata {
             authors: Some(vec!["Foo".to_owned()]),
             ..Default::default()
@@ -379,7 +379,7 @@ mod test {
 
         let metadata = Metadata::from_binary(&module).unwrap();
         match metadata {
-            Metadata::Module {
+            Metadata::Component {
                 registry_metadata, ..
             } => {
                 let registry_metadata = registry_metadata.expect("some registry_metadata");

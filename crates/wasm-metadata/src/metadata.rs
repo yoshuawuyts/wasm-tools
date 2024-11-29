@@ -29,8 +29,6 @@ pub enum Metadata {
         name: Option<String>,
         /// The module's producers section, if any.
         producers: Option<Producers>,
-        /// The module's registry metadata section, if any.
-        registry_metadata: Option<RegistryMetadata>,
         /// Byte range of the module in the parent binary
         range: Range<usize>,
     },
@@ -130,7 +128,6 @@ impl Metadata {
         Metadata::Module {
             name: None,
             producers: None,
-            registry_metadata: None,
             range,
         }
     }
@@ -146,14 +143,13 @@ impl Metadata {
             Metadata::Component { producers, .. } => *producers = Some(p),
         }
     }
+
     fn set_registry_metadata(&mut self, r: RegistryMetadata) {
         match self {
-            Metadata::Module {
-                registry_metadata, ..
-            } => *registry_metadata = Some(r),
             Metadata::Component {
                 registry_metadata, ..
             } => *registry_metadata = Some(r),
+            _ => panic!("cannot set registry metadata on a module, only on a component"),
         }
     }
     fn push_child(&mut self, child: Self) {
@@ -167,10 +163,7 @@ impl Metadata {
         let spaces = std::iter::repeat(" ").take(indent).collect::<String>();
         match self {
             Metadata::Module {
-                name,
-                producers,
-                registry_metadata,
-                ..
+                name, producers, ..
             } => {
                 if let Some(name) = name {
                     writeln!(f, "{spaces}module {name}:")?;
@@ -179,9 +172,6 @@ impl Metadata {
                 }
                 if let Some(producers) = producers {
                     producers.display(f, indent + 4)?;
-                }
-                if let Some(registry_metadata) = registry_metadata {
-                    registry_metadata.display(f, indent + 4)?;
                 }
                 Ok(())
             }

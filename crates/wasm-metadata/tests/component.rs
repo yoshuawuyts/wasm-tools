@@ -156,7 +156,6 @@ fn add_to_nested_component() {
                 Metadata::Module {
                     name,
                     producers,
-                    registry_metadata,
                     range,
                 } => {
                     assert_eq!(name, &Some("foo".to_owned()));
@@ -165,12 +164,6 @@ fn add_to_nested_component() {
                     assert_eq!(
                         producers.get("processed-by").unwrap().get("baz").unwrap(),
                         "1.0"
-                    );
-
-                    let registry_metadata = registry_metadata.as_ref().unwrap();
-                    assert_eq!(
-                        registry_metadata.authors.as_ref().unwrap(),
-                        &["Foo".to_owned()]
                     );
 
                     assert_eq!(range.start, 10);

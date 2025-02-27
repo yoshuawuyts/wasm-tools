@@ -56,6 +56,7 @@ pub use producers::{Producers, ProducersField};
 pub(crate) use rewrite::rewrite_wasm;
 
 mod add_metadata;
+mod dependencies;
 mod metadata;
 mod names;
 mod oci_annotations;
